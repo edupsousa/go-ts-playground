@@ -3,11 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm:watch:go\" \"npm:watch:vite\"",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "watch:vite": "vite",
+    "watch:go": "chokidar \"src/wasm/**/*.go\" -c \"npm run build:go\"",
+    "build:go": "tinygo build -o src/wasm/dist/main.wasm -target wasm src/wasm/main.go"
   },
   "devDependencies": {
+    "chokidar-cli": "^3.0.0",
+    "concurrently": "^7.1.0",
     "typescript": "^4.5.4",
     "vite": "^2.9.7"
   }
