@@ -7,8 +7,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "watch:vite": "vite",
+    "watch:tinygo": "chokidar \"src/wasm/**/*.go\" -c \"npm run build:tinygo\"",
+    "build:tinygo": "tinygo build -o src/wasm/dist/tinygo.wasm -target wasm src/wasm/main.go",
     "watch:go": "chokidar \"src/wasm/**/*.go\" -c \"npm run build:go\"",
-    "build:go": "tinygo build -o src/wasm/dist/main.wasm -target wasm src/wasm/main.go"
+    "build:go": "GOOS=js GOARCH=wasm go build -o src/wasm/dist/go.wasm ./src/wasm/main.go"
   },
   "devDependencies": {
     "chokidar-cli": "^3.0.0",

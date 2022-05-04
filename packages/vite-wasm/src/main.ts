@@ -1,11 +1,11 @@
 import "./style.css";
-import "./wasm/dist/wasm_exec.js";
-import main from "./wasm/dist/main.wasm";
+import main from "./wasm/dist/go.wasm";
+import { createFromExports, GoWasm } from "./go";
 
-const go = new Go();
+const go = new GoWasm();
 main(go.importObject).then((exports) => {
   console.info(`WASM Module Loaded via Vite`);
-  const instance: WebAssembly.Instance = { exports };
+  const instance = createFromExports(exports);
   go.run(instance);
 });
 
