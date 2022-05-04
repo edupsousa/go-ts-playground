@@ -1,5 +1,15 @@
 import { fs, process } from "./sys";
 
+type GlobalThis = any & {
+  fs: any;
+  process: any;
+};
+
+declare var globalThis: GlobalThis;
+
+globalThis.fs = fs;
+globalThis.process = process;
+
 type GoWasmPendingEvent = {
   id: number;
   this: any;
@@ -32,9 +42,10 @@ export function createFromExports(
 }
 
 type GoWasmMemory = {
-  mem: DataView;
+  setUint8: (addr: number, v: number) => void;
   getInt32: (addr: number) => number;
   setInt32: (addr: number, v: number) => void;
+  getUint32: (addr: number) => number;
   setInt64: (addr: number, v: number) => void;
   getInt64: (addr: number) => number;
   loadValue: (addr: number) => any;
@@ -42,46 +53,105 @@ type GoWasmMemory = {
   loadSlice: (addr: number) => Uint8Array;
   loadSliceOfValues: (addr: number) => any[];
   loadString: (addr: number) => string;
+  storeArguments: (
+    args: string[],
+    env: Record<string, string>
+  ) => { argc: number; argv: number };
+  removeRef: (id: number) => void;
+  setInstance: (instance: GoWasmInstance) => void;
+  updateDataBuffer: (buffer: ArrayBuffer) => void;
 };
 
-function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
-  const mem = new DataView(instance.exports.mem.buffer);
-
-  const _values = [
-    // JS values that Go currently has references to, indexed by reference id
-    NaN,
-    0,
-    null,
-    true,
-    false,
-    globalThis,
-    this,
-  ];
-  const _goRefCounts = new Array(_values.length).fill(Infinity); // number of references that Go has to a JS value, indexed by reference id
-  const _ids = new Map<any, number>([
-    // mapping from JS values to reference ids
-    [0, 1],
-    [null, 2],
-    [true, 3],
-    [false, 4],
-    [globalThis, 5],
-    [this, 6],
-  ]);
-  const _idPool: number[] = []; // unused ids that have been garbage collected
-
-  const setInt64 = (addr: number, v: number) => {
-    mem.setUint32(addr + 0, v, true);
-    mem.setUint32(addr + 4, Math.floor(v / 4294967296), true);
+function createGoWasmMemory(jsGo: GoWasm): GoWasmMemory {
+  const data = {
+    instance: {} as GoWasmInstance,
+    buffer: new DataView(new ArrayBuffer(0)),
+    _values: [
+      // JS values that Go currently has references to, indexed by reference id
+      NaN,
+      0,
+      null,
+      true,
+      false,
+      globalThis,
+      jsGo,
+    ],
+    _goRefCounts: new Array(7).fill(Infinity), // number of references that Go has to a JS value, indexed by reference id
+    _ids: new Map<any, number>([
+      // mapping from JS values to reference ids
+      [0, 1],
+      [null, 2],
+      [true, 3],
+      [false, 4],
+      [globalThis, 5],
+      [jsGo, 6],
+    ]),
+    _idPool: [] as number[], // unused ids that have been garbage collected
   };
 
-  const getInt64 = (addr: number) => {
-    const low = mem.getUint32(addr + 0, true);
-    const high = mem.getInt32(addr + 4, true);
+  function storeArguments(
+    args: string[] = [],
+    env: Record<string, string> = {}
+  ): { argv: number; argc: number } {
+    // Pass command line arguments and environment variables to WebAssembly by writing them to the linear memory.
+    let offset = 4096;
+
+    const strPtr = (str: string) => {
+      const ptr = offset;
+      const bytes = encoder.encode(str + "\0");
+      new Uint8Array(data.buffer.buffer, offset, bytes.length).set(bytes);
+      offset += bytes.length;
+      if (offset % 8 !== 0) {
+        offset += 8 - (offset % 8);
+      }
+      return ptr;
+    };
+
+    const argc = args.length;
+
+    const argvPtrs = [];
+    args.forEach((arg) => {
+      argvPtrs.push(strPtr(arg));
+    });
+    argvPtrs.push(0);
+
+    const keys = Object.keys(env).sort();
+    keys.forEach((key) => {
+      argvPtrs.push(strPtr(`${key}=${env[key]}`));
+    });
+    argvPtrs.push(0);
+
+    const argv = offset;
+    argvPtrs.forEach((ptr) => {
+      data.buffer.setUint32(offset, ptr, true);
+      data.buffer.setUint32(offset + 4, 0, true);
+      offset += 8;
+    });
+
+    // The linker guarantees global data starts from at least wasmMinDataAddr.
+    // Keep in sync with cmd/link/internal/ld/data.go:wasmMinDataAddr.
+    const wasmMinDataAddr = 4096 + 8192;
+    if (offset >= wasmMinDataAddr) {
+      throw new Error(
+        "total length of command line and environment variables exceeds limit"
+      );
+    }
+    return { argc, argv };
+  }
+
+  function setInt64(addr: number, v: number) {
+    data.buffer.setUint32(addr + 0, v, true);
+    data.buffer.setUint32(addr + 4, Math.floor(v / 4294967296), true);
+  }
+
+  function getInt64(addr: number) {
+    const low = data.buffer.getUint32(addr + 0, true);
+    const high = data.buffer.getInt32(addr + 4, true);
     return low + high * 4294967296;
-  };
+  }
 
-  const loadValue = (addr: number) => {
-    const f = mem.getFloat64(addr, true);
+  function loadValue(addr: number) {
+    const f = data.buffer.getFloat64(addr, true);
     if (f === 0) {
       return undefined;
     }
@@ -89,39 +159,39 @@ function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
       return f;
     }
 
-    const id = mem.getUint32(addr, true);
-    return _values[id];
-  };
+    const id = data.buffer.getUint32(addr, true);
+    return data._values[id];
+  }
 
-  const storeValue = (addr: number, v: any) => {
+  function storeValue(addr: number, v: any) {
     const nanHead = 0x7ff80000;
 
     if (typeof v === "number" && v !== 0) {
       if (isNaN(v)) {
-        mem.setUint32(addr + 4, nanHead, true);
-        mem.setUint32(addr, 0, true);
+        data.buffer.setUint32(addr + 4, nanHead, true);
+        data.buffer.setUint32(addr, 0, true);
         return;
       }
-      mem.setFloat64(addr, v, true);
+      data.buffer.setFloat64(addr, v, true);
       return;
     }
 
     if (v === undefined) {
-      mem.setFloat64(addr, 0, true);
+      data.buffer.setFloat64(addr, 0, true);
       return;
     }
 
-    let id = _ids.get(v);
+    let id = data._ids.get(v);
     if (id === undefined) {
-      id = _idPool.pop();
+      id = data._idPool.pop();
       if (id === undefined) {
-        id = _values.length;
+        id = data._values.length;
       }
-      _values[id] = v;
-      _goRefCounts[id] = 0;
-      _ids.set(v, id);
+      data._values[id] = v;
+      data._goRefCounts[id] = 0;
+      data._ids.set(v, id);
     }
-    _goRefCounts[id]++;
+    data._goRefCounts[id]++;
     let typeFlag = 0;
     switch (typeof v) {
       case "object":
@@ -139,17 +209,17 @@ function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
         typeFlag = 4;
         break;
     }
-    mem.setUint32(addr + 4, nanHead | typeFlag, true);
-    mem.setUint32(addr, id, true);
-  };
+    data.buffer.setUint32(addr + 4, nanHead | typeFlag, true);
+    data.buffer.setUint32(addr, id, true);
+  }
 
-  const loadSlice = (addr: number) => {
+  function loadSlice(addr: number) {
     const array = getInt64(addr + 0);
     const len = getInt64(addr + 8);
-    return new Uint8Array(instance.exports.mem.buffer, array, len);
-  };
+    return new Uint8Array(data.instance.exports.mem.buffer, array, len);
+  }
 
-  const loadSliceOfValues = (addr: number) => {
+  function loadSliceOfValues(addr: number) {
     const array = getInt64(addr + 0);
     const len = getInt64(addr + 8);
     const a = new Array(len);
@@ -157,20 +227,40 @@ function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
       a[i] = loadValue(array + i * 8);
     }
     return a;
-  };
+  }
 
-  const loadString = (addr: number) => {
+  function loadString(addr: number) {
     const saddr = getInt64(addr + 0);
     const len = getInt64(addr + 8);
     return decoder.decode(
-      new DataView(instance.exports.mem.buffer, saddr, len)
+      new DataView(data.instance.exports.mem.buffer, saddr, len)
     );
-  };
+  }
+
+  function removeRef(id: number) {
+    data._goRefCounts[id]--;
+    if (data._goRefCounts[id] === 0) {
+      const v = data._values[id];
+      data._values[id] = null;
+      data._ids.delete(v);
+      data._idPool.push(id);
+    }
+  }
+
+  function updateDataBuffer(buffer: ArrayBuffer) {
+    data.buffer = new DataView(buffer);
+  }
+
+  function setInstance(instance: GoWasmInstance) {
+    data.instance = instance;
+    updateDataBuffer(instance.exports.mem.buffer);
+  }
 
   return {
-    mem,
-    getInt32: (addr: number) => mem.getInt32(addr, true),
-    setInt32: (addr: number, v: number) => mem.setInt32(addr, v, true),
+    setUint8: (addr: number, v: number) => data.buffer.setUint8(addr, v),
+    getInt32: (addr: number) => data.buffer.getInt32(addr, true),
+    setInt32: (addr: number, v: number) => data.buffer.setInt32(addr, v, true),
+    getUint32: (addr: number) => data.buffer.getUint32(addr, true),
     setInt64,
     getInt64,
     loadValue,
@@ -178,6 +268,10 @@ function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
     loadSlice,
     loadSliceOfValues,
     loadString,
+    storeArguments,
+    removeRef,
+    setInstance,
+    updateDataBuffer,
   };
 }
 
@@ -195,11 +289,12 @@ export class GoWasm {
   private _pendingEvent: null | GoWasmPendingEvent;
   private _scheduledTimeouts: Map<number, number>;
   private _nextCallbackTimeoutID: number;
+  private _memory: GoWasmMemory;
 
   constructor() {
-    // Fields not initialized in original code constructor
     this._resolveExitPromise = () => {};
     this._inst = {} as GoWasmInstance;
+    this._memory = createGoWasmMemory(this);
 
     this.argv = ["js"];
     this.env = {};
@@ -222,7 +317,7 @@ export class GoWasm {
         // func wasmExit(code int32)
         "runtime.wasmExit": (sp: number) => {
           sp >>>= 0;
-          const code = this.mem.getInt32(sp + 8, true);
+          const code = this._memory.getInt32(sp + 8);
           this.exited = true;
           // delete this._inst;
           // delete this._values;
@@ -235,30 +330,33 @@ export class GoWasm {
         // func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
         "runtime.wasmWrite": (sp: number) => {
           sp >>>= 0;
-          const fd = getInt64(sp + 8);
-          const p = getInt64(sp + 16);
-          const n = this.mem.getInt32(sp + 24, true);
+          const fd = this._memory.getInt64(sp + 8);
+          const p = this._memory.getInt64(sp + 16);
+          const n = this._memory.getInt32(sp + 24);
           fs.writeSync(fd, new Uint8Array(this._inst.exports.mem.buffer, p, n));
         },
 
         // func resetMemoryDataView()
         "runtime.resetMemoryDataView": (sp: number) => {
           sp >>>= 0;
-          this.mem = new DataView(this._inst.exports.mem.buffer);
+          this._memory.updateDataBuffer(this._inst.exports.mem.buffer);
         },
 
         // func nanotime1() int64
         "runtime.nanotime1": (sp: number) => {
           sp >>>= 0;
-          setInt64(sp + 8, (timeOrigin + performance.now()) * 1000000);
+          this._memory.setInt64(
+            sp + 8,
+            (timeOrigin + performance.now()) * 1000000
+          );
         },
 
         // func walltime() (sec int64, nsec int32)
         "runtime.walltime": (sp: number) => {
           sp >>>= 0;
           const msec = new Date().getTime();
-          setInt64(sp + 8, msec / 1000);
-          this.mem.setInt32(sp + 16, (msec % 1000) * 1000000, true);
+          this._memory.setInt64(sp + 8, msec / 1000);
+          this._memory.setInt32(sp + 16, (msec % 1000) * 1000000);
         },
 
         // func scheduleTimeoutEvent(delay int64) int32
@@ -278,16 +376,16 @@ export class GoWasm {
                   this._resume();
                 }
               },
-              getInt64(sp + 8) + 1 // setTimeout has been seen to fire up to 1 millisecond early
+              this._memory.getInt64(sp + 8) + 1 // setTimeout has been seen to fire up to 1 millisecond early
             )
           );
-          this.mem.setInt32(sp + 16, id, true);
+          this._memory.setInt32(sp + 16, id);
         },
 
         // func clearTimeoutEvent(id int32)
         "runtime.clearTimeoutEvent": (sp: number) => {
           sp >>>= 0;
-          const id = this.mem.getInt32(sp + 8, true);
+          const id = this._memory.getInt32(sp + 8);
           const timeoutId = this._scheduledTimeouts.get(id);
           if (timeoutId === undefined) return;
           clearTimeout(timeoutId);
@@ -297,82 +395,89 @@ export class GoWasm {
         // func getRandomData(r []byte)
         "runtime.getRandomData": (sp: number) => {
           sp >>>= 0;
-          crypto.getRandomValues(loadSlice(sp + 8));
+          crypto.getRandomValues(this._memory.loadSlice(sp + 8));
         },
 
         // func finalizeRef(v ref)
         "syscall/js.finalizeRef": (sp: number) => {
           sp >>>= 0;
-          const id = this.mem.getUint32(sp + 8, true);
-          this._goRefCounts[id]--;
-          if (this._goRefCounts[id] === 0) {
-            const v = this._values[id];
-            this._values[id] = null;
-            this._ids.delete(v);
-            this._idPool.push(id);
-          }
+          const id = this._memory.getUint32(sp + 8);
+          this._memory.removeRef(id);
         },
 
         // func stringVal(value string) ref
         "syscall/js.stringVal": (sp: number) => {
           sp >>>= 0;
-          storeValue(sp + 24, loadString(sp + 8));
+          this._memory.storeValue(sp + 24, this._memory.loadString(sp + 8));
         },
 
         // func valueGet(v ref, p string) ref
         "syscall/js.valueGet": (sp: number) => {
           sp >>>= 0;
-          const result = Reflect.get(loadValue(sp + 8), loadString(sp + 16));
+          const result = Reflect.get(
+            this._memory.loadValue(sp + 8),
+            this._memory.loadString(sp + 16)
+          );
           sp = this._inst.exports.getsp() >>> 0; // see comment above
-          storeValue(sp + 32, result);
+          this._memory.storeValue(sp + 32, result);
         },
 
         // func valueSet(v ref, p string, x ref)
         "syscall/js.valueSet": (sp: number) => {
           sp >>>= 0;
           Reflect.set(
-            loadValue(sp + 8),
-            loadString(sp + 16),
-            loadValue(sp + 32)
+            this._memory.loadValue(sp + 8),
+            this._memory.loadString(sp + 16),
+            this._memory.loadValue(sp + 32)
           );
         },
 
         // func valueDelete(v ref, p string)
         "syscall/js.valueDelete": (sp: number) => {
           sp >>>= 0;
-          Reflect.deleteProperty(loadValue(sp + 8), loadString(sp + 16));
+          Reflect.deleteProperty(
+            this._memory.loadValue(sp + 8),
+            this._memory.loadString(sp + 16)
+          );
         },
 
         // func valueIndex(v ref, i int) ref
         "syscall/js.valueIndex": (sp: number) => {
           sp >>>= 0;
-          storeValue(
+          this._memory.storeValue(
             sp + 24,
-            Reflect.get(loadValue(sp + 8), getInt64(sp + 16))
+            Reflect.get(
+              this._memory.loadValue(sp + 8),
+              this._memory.getInt64(sp + 16)
+            )
           );
         },
 
         // valueSetIndex(v ref, i int, x ref)
         "syscall/js.valueSetIndex": (sp: number) => {
           sp >>>= 0;
-          Reflect.set(loadValue(sp + 8), getInt64(sp + 16), loadValue(sp + 24));
+          Reflect.set(
+            this._memory.loadValue(sp + 8),
+            this._memory.getInt64(sp + 16),
+            this._memory.loadValue(sp + 24)
+          );
         },
 
         // func valueCall(v ref, m string, args []ref) (ref, bool)
         "syscall/js.valueCall": (sp: number) => {
           sp >>>= 0;
           try {
-            const v = loadValue(sp + 8);
-            const m = Reflect.get(v, loadString(sp + 16));
-            const args = loadSliceOfValues(sp + 32);
+            const v = this._memory.loadValue(sp + 8);
+            const m = Reflect.get(v, this._memory.loadString(sp + 16));
+            const args = this._memory.loadSliceOfValues(sp + 32);
             const result = Reflect.apply(m, v, args);
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 56, result);
-            this.mem.setUint8(sp + 64, 1);
+            this._memory.storeValue(sp + 56, result);
+            this._memory.setUint8(sp + 64, 1);
           } catch (err) {
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 56, err);
-            this.mem.setUint8(sp + 64, 0);
+            this._memory.storeValue(sp + 56, err);
+            this._memory.setUint8(sp + 64, 0);
           }
         },
 
@@ -380,16 +485,16 @@ export class GoWasm {
         "syscall/js.valueInvoke": (sp: number) => {
           sp >>>= 0;
           try {
-            const v = loadValue(sp + 8);
-            const args = loadSliceOfValues(sp + 16);
+            const v = this._memory.loadValue(sp + 8);
+            const args = this._memory.loadSliceOfValues(sp + 16);
             const result = Reflect.apply(v, undefined, args);
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 40, result);
-            this.mem.setUint8(sp + 48, 1);
+            this._memory.storeValue(sp + 40, result);
+            this._memory.setUint8(sp + 48, 1);
           } catch (err) {
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 40, err);
-            this.mem.setUint8(sp + 48, 0);
+            this._memory.storeValue(sp + 40, err);
+            this._memory.setUint8(sp + 48, 0);
           }
         },
 
@@ -397,81 +502,87 @@ export class GoWasm {
         "syscall/js.valueNew": (sp: number) => {
           sp >>>= 0;
           try {
-            const v = loadValue(sp + 8);
-            const args = loadSliceOfValues(sp + 16);
+            const v = this._memory.loadValue(sp + 8);
+            const args = this._memory.loadSliceOfValues(sp + 16);
             const result = Reflect.construct(v, args);
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 40, result);
-            this.mem.setUint8(sp + 48, 1);
+            this._memory.storeValue(sp + 40, result);
+            this._memory.setUint8(sp + 48, 1);
           } catch (err) {
             sp = this._inst.exports.getsp() >>> 0; // see comment above
-            storeValue(sp + 40, err);
-            this.mem.setUint8(sp + 48, 0);
+            this._memory.storeValue(sp + 40, err);
+            this._memory.setUint8(sp + 48, 0);
           }
         },
 
         // func valueLength(v ref) int
         "syscall/js.valueLength": (sp: number) => {
           sp >>>= 0;
-          setInt64(sp + 16, parseInt(loadValue(sp + 8).length));
+          this._memory.setInt64(
+            sp + 16,
+            parseInt(this._memory.loadValue(sp + 8).length)
+          );
         },
 
         // valuePrepareString(v ref) (ref, int)
         "syscall/js.valuePrepareString": (sp: number) => {
           sp >>>= 0;
-          const str = encoder.encode(String(loadValue(sp + 8)));
-          storeValue(sp + 16, str);
-          setInt64(sp + 24, str.length);
+          const str = encoder.encode(String(this._memory.loadValue(sp + 8)));
+          this._memory.storeValue(sp + 16, str);
+          this._memory.setInt64(sp + 24, str.length);
         },
 
         // valueLoadString(v ref, b []byte)
         "syscall/js.valueLoadString": (sp: number) => {
           sp >>>= 0;
-          const str = loadValue(sp + 8);
-          loadSlice(sp + 16).set(str);
+          const str = this._memory.loadValue(sp + 8);
+          this._memory.loadSlice(sp + 16).set(str);
         },
 
         // func valueInstanceOf(v ref, t ref) bool
         "syscall/js.valueInstanceOf": (sp: number) => {
           sp >>>= 0;
-          this.mem.setUint8(
+          this._memory.setUint8(
             sp + 24,
-            loadValue(sp + 8) instanceof loadValue(sp + 16) ? 1 : 0
+            this._memory.loadValue(sp + 8) instanceof
+              this._memory.loadValue(sp + 16)
+              ? 1
+              : 0
           );
         },
 
         // func copyBytesToGo(dst []byte, src ref) (int, bool)
         "syscall/js.copyBytesToGo": (sp: number) => {
           sp >>>= 0;
-          const dst = loadSlice(sp + 8);
-          const src = loadValue(sp + 32);
+          const dst = this._memory.loadSlice(sp + 8);
+          const src = this._memory.loadValue(sp + 32);
           if (
             !(src instanceof Uint8Array || src instanceof Uint8ClampedArray)
           ) {
-            this.mem.setUint8(sp + 48, 0);
+            this._memory.setUint8(sp + 48, 0);
             return;
           }
           const toCopy = src.subarray(0, dst.length);
           dst.set(toCopy);
-          setInt64(sp + 40, toCopy.length);
-          this.mem.setUint8(sp + 48, 1);
+          this._memory.setInt64(sp + 40, toCopy.length);
+          this._memory.setUint8(sp + 48, 1);
         },
 
         // func copyBytesToJS(dst ref, src []byte) (int, bool)
         "syscall/js.copyBytesToJS": (sp: number) => {
           sp >>>= 0;
-          const dst = loadValue(sp + 8);
-          const src = loadSlice(sp + 16);
+          const dst = this._memory.loadValue(sp + 8);
+          const src = this._memory.loadSlice(sp + 16);
           if (
             !(dst instanceof Uint8Array || dst instanceof Uint8ClampedArray)
           ) {
-            this.mem.setUint8(sp + 48, 0);
+            this._memory.setUint8(sp + 48, 0);
             return;
           }
           const toCopy = src.subarray(0, dst.length);
           dst.set(toCopy);
-          setInt64(sp + 40, toCopy.length);
-          this.mem.setUint8(sp + 48, 1);
+          this._memory.setInt64(sp + 40, toCopy.length);
+          this._memory.setUint8(sp + 48, 1);
         },
 
         debug: (value: any) => {
@@ -488,80 +599,11 @@ export class GoWasm {
   }
 
   async run(instance: GoWasmInstance) {
-    if (!(instance instanceof WebAssembly.Instance)) {
-      throw new Error("Go.run: WebAssembly.Instance expected");
-    }
     this._inst = instance;
-    this.mem = new DataView(this._inst.exports.mem.buffer);
-    globalThis.fs = fs;
-    globalThis.process = process;
-    this._values = [
-      // JS values that Go currently has references to, indexed by reference id
-      NaN,
-      0,
-      null,
-      true,
-      false,
-      globalThis,
-      this,
-    ];
-    this._goRefCounts = new Array(this._values.length).fill(Infinity); // number of references that Go has to a JS value, indexed by reference id
-    this._ids = new Map<any, number>([
-      // mapping from JS values to reference ids
-      [0, 1],
-      [null, 2],
-      [true, 3],
-      [false, 4],
-      [globalThis, 5],
-      [this, 6],
-    ]);
-    this._idPool = []; // unused ids that have been garbage collected
+    this._memory.setInstance(instance);
+
     this.exited = false; // whether the Go program has exited
-
-    // Pass command line arguments and environment variables to WebAssembly by writing them to the linear memory.
-    let offset = 4096;
-
-    const strPtr = (str: string) => {
-      const ptr = offset;
-      const bytes = encoder.encode(str + "\0");
-      new Uint8Array(this.mem.buffer, offset, bytes.length).set(bytes);
-      offset += bytes.length;
-      if (offset % 8 !== 0) {
-        offset += 8 - (offset % 8);
-      }
-      return ptr;
-    };
-
-    const argc = this.argv.length;
-
-    const argvPtrs = [];
-    this.argv.forEach((arg) => {
-      argvPtrs.push(strPtr(arg));
-    });
-    argvPtrs.push(0);
-
-    const keys = Object.keys(this.env).sort();
-    keys.forEach((key) => {
-      argvPtrs.push(strPtr(`${key}=${this.env[key]}`));
-    });
-    argvPtrs.push(0);
-
-    const argv = offset;
-    argvPtrs.forEach((ptr) => {
-      this.mem.setUint32(offset, ptr, true);
-      this.mem.setUint32(offset + 4, 0, true);
-      offset += 8;
-    });
-
-    // The linker guarantees global data starts from at least wasmMinDataAddr.
-    // Keep in sync with cmd/link/internal/ld/data.go:wasmMinDataAddr.
-    const wasmMinDataAddr = 4096 + 8192;
-    if (offset >= wasmMinDataAddr) {
-      throw new Error(
-        "total length of command line and environment variables exceeds limit"
-      );
-    }
-
+    const { argc, argv } = this._memory.storeArguments(this.argv, this.env);
     this._inst.exports.run(argc, argv);
     if (this.exited) {
       this._resolveExitPromise();
