@@ -278,11 +278,9 @@ export class GoWasm {
 
         // func valueGet(v ref, p string) ref
         "syscall/js.valueGet": (sp: number) => {
-          console.log("syscall/js.valueGet", sp.toString(16));
           sp >>>= 0;
           const result = Reflect.get(loadValue(sp + 8), loadString(sp + 16));
           sp = this._inst.exports.getsp() >>> 0; // see comment above
-          console.log("syscall/js.valueGet result", result);
           storeValue(sp + 32, result);
         },
 
