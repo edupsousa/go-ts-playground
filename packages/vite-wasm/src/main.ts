@@ -1,6 +1,6 @@
 import "./style.css";
 import main from "./wasm/dist/go.wasm";
-import { createFromExports, GoWasm } from "./go";
+import { createFromExports, GoWasm } from "./glue/go";
 
 const go = new GoWasm();
 main(go.importObject).then((exports) => {

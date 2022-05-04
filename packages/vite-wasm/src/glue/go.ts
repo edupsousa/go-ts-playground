@@ -42,6 +42,7 @@ export class GoWasm {
   private _inst: GoWasmInstance;
   private _exitPromise: Promise<void>;
   private _resolveExitPromise: () => void;
+  // * It's used on the Go side (https://github.com/golang/go/blob/0b0d2fe66d2348fa694a925595807859bf08a391/src/syscall/js/func.go#L69)
   private _pendingEvent: null | GoWasmPendingEvent;
   private _scheduledTimeouts: Map<number, number>;
   private _nextCallbackTimeoutID: number;
