@@ -31,10 +31,159 @@ export function createFromExports(
   return instance;
 }
 
+type GoWasmMemory = {
+  mem: DataView;
+  getInt32: (addr: number) => number;
+  setInt32: (addr: number, v: number) => void;
+  setInt64: (addr: number, v: number) => void;
+  getInt64: (addr: number) => number;
+  loadValue: (addr: number) => any;
+  storeValue: (addr: number, v: any) => void;
+  loadSlice: (addr: number) => Uint8Array;
+  loadSliceOfValues: (addr: number) => any[];
+  loadString: (addr: number) => string;
+};
+
+function createGoWasmMemory(instance: GoWasmInstance): GoWasmMemory {
+  const mem = new DataView(instance.exports.mem.buffer);
+
+  const _values = [
+    // JS values that Go currently has references to, indexed by reference id
+    NaN,
+    0,
+    null,
+    true,
+    false,
+    globalThis,
+    this,
+  ];
+  const _goRefCounts = new Array(_values.length).fill(Infinity); // number of references that Go has to a JS value, indexed by reference id
+  const _ids = new Map<any, number>([
+    // mapping from JS values to reference ids
+    [0, 1],
+    [null, 2],
+    [true, 3],
+    [false, 4],
+    [globalThis, 5],
+    [this, 6],
+  ]);
+  const _idPool: number[] = []; // unused ids that have been garbage collected
+
+  const setInt64 = (addr: number, v: number) => {
+    mem.setUint32(addr + 0, v, true);
+    mem.setUint32(addr + 4, Math.floor(v / 4294967296), true);
+  };
+
+  const getInt64 = (addr: number) => {
+    const low = mem.getUint32(addr + 0, true);
+    const high = mem.getInt32(addr + 4, true);
+    return low + high * 4294967296;
+  };
+
+  const loadValue = (addr: number) => {
+    const f = mem.getFloat64(addr, true);
+    if (f === 0) {
+      return undefined;
+    }
+    if (!isNaN(f)) {
+      return f;
+    }
+
+    const id = mem.getUint32(addr, true);
+    return _values[id];
+  };
+
+  const storeValue = (addr: number, v: any) => {
+    const nanHead = 0x7ff80000;
+
+    if (typeof v === "number" && v !== 0) {
+      if (isNaN(v)) {
+        mem.setUint32(addr + 4, nanHead, true);
+        mem.setUint32(addr, 0, true);
+        return;
+      }
+      mem.setFloat64(addr, v, true);
+      return;
+    }
+
+    if (v === undefined) {
+      mem.setFloat64(addr, 0, true);
+      return;
+    }
+
+    let id = _ids.get(v);
+    if (id === undefined) {
+      id = _idPool.pop();
+      if (id === undefined) {
+        id = _values.length;
+      }
+      _values[id] = v;
+      _goRefCounts[id] = 0;
+      _ids.set(v, id);
+    }
+    _goRefCounts[id]++;
+    let typeFlag = 0;
+    switch (typeof v) {
+      case "object":
+        if (v !== null) {
+          typeFlag = 1;
+        }
+        break;
+      case "string":
+        typeFlag = 2;
+        break;
+      case "symbol":
+        typeFlag = 3;
+        break;
+      case "function":
+        typeFlag = 4;
+        break;
+    }
+    mem.setUint32(addr + 4, nanHead | typeFlag, true);
+    mem.setUint32(addr, id, true);
+  };
+
+  const loadSlice = (addr: number) => {
+    const array = getInt64(addr + 0);
+    const len = getInt64(addr + 8);
+    return new Uint8Array(instance.exports.mem.buffer, array, len);
+  };
+
+  const loadSliceOfValues = (addr: number) => {
+    const array = getInt64(addr + 0);
+    const len = getInt64(addr + 8);
+    const a = new Array(len);
+    for (let i = 0; i < len; i++) {
+      a[i] = loadValue(array + i * 8);
+    }
+    return a;
+  };
+
+  const loadString = (addr: number) => {
+    const saddr = getInt64(addr + 0);
+    const len = getInt64(addr + 8);
+    return decoder.decode(
+      new DataView(instance.exports.mem.buffer, saddr, len)
+    );
+  };
+
+  return {
+    mem,
+    getInt32: (addr: number) => mem.getInt32(addr, true),
+    setInt32: (addr: number, v: number) => mem.setInt32(addr, v, true),
+    setInt64,
+    getInt64,
+    loadValue,
+    storeValue,
+    loadSlice,
+    loadSliceOfValues,
+    loadString,
+  };
+}
+
 export class GoWasm {
   public argv: string[];
   public env: Record<string, string>;
-  public mem: DataView;
   public importObject: WebAssembly.Imports;
   public exited = false;
   public outputBuf: string;
@@ -46,19 +195,10 @@ export class GoWasm {
   private _pendingEvent: null | GoWasmPendingEvent;
   private _scheduledTimeouts: Map<number, number>;
   private _nextCallbackTimeoutID: number;
-  private _values: any[];
-  private _ids: Map<any, number>;
-  private _idPool: number[];
-  private _goRefCounts: number[];
 
   constructor() {
     // Fields not initialized in original code constructor
-    this.mem = new DataView(new ArrayBuffer(0));
     this._resolveExitPromise = () => {};
-    this._values = [];
-    this._ids = new Map();
-    this._idPool = [];
-    this._goRefCounts = [];
     this._inst = {} as GoWasmInstance;
 
     this.argv = ["js"];
@@ -70,104 +210,6 @@ export class GoWasm {
     this._pendingEvent = null;
     this._scheduledTimeouts = new Map();
     this._nextCallbackTimeoutID = 1;
-
-    const setInt64 = (addr: number, v: number) => {
-      this.mem.setUint32(addr + 0, v, true);
-      this.mem.setUint32(addr + 4, Math.floor(v / 4294967296), true);
-    };
-
-    const getInt64 = (addr: number) => {
-      const low = this.mem.getUint32(addr + 0, true);
-      const high = this.mem.getInt32(addr + 4, true);
-      return low + high * 4294967296;
-    };
-
-    const loadValue = (addr: number) => {
-      const f = this.mem.getFloat64(addr, true);
-      if (f === 0) {
-        return undefined;
-      }
-      if (!isNaN(f)) {
-        return f;
-      }
-
-      const id = this.mem.getUint32(addr, true);
-      return this._values[id];
-    };
-
-    const storeValue = (addr: number, v: any) => {
-      const nanHead = 0x7ff80000;
-
-      if (typeof v === "number" && v !== 0) {
-        if (isNaN(v)) {
-          this.mem.setUint32(addr + 4, nanHead, true);
-          this.mem.setUint32(addr, 0, true);
-          return;
-        }
-        this.mem.setFloat64(addr, v, true);
-        return;
-      }
-
-      if (v === undefined) {
-        this.mem.setFloat64(addr, 0, true);
-        return;
-      }
-
-      let id = this._ids.get(v);
-      if (id === undefined) {
-        id = this._idPool.pop();
-        if (id === undefined) {
-          id = this._values.length;
-        }
-        this._values[id] = v;
-        this._goRefCounts[id] = 0;
-        this._ids.set(v, id);
-      }
-      this._goRefCounts[id]++;
-      let typeFlag = 0;
-      switch (typeof v) {
-        case "object":
-          if (v !== null) {
-            typeFlag = 1;
-          }
-          break;
-        case "string":
-          typeFlag = 2;
-          break;
-        case "symbol":
-          typeFlag = 3;
-          break;
-        case "function":
-          typeFlag = 4;
-          break;
-      }
-      this.mem.setUint32(addr + 4, nanHead | typeFlag, true);
-      this.mem.setUint32(addr, id, true);
-    };
-
-    const loadSlice = (addr: number) => {
-      const array = getInt64(addr + 0);
-      const len = getInt64(addr + 8);
-      return new Uint8Array(this._inst.exports.mem.buffer, array, len);
-    };
-
-    const loadSliceOfValues = (addr: number) => {
-      const array = getInt64(addr + 0);
-      const len = getInt64(addr + 8);
-      const a = new Array(len);
-      for (let i = 0; i < len; i++) {
-        a[i] = loadValue(array + i * 8);
-      }
-      return a;
-    };
-
-    const loadString = (addr: number) => {
-      const saddr = getInt64(addr + 0);
-      const len = getInt64(addr + 8);
-      return decoder.decode(
-        new DataView(this._inst.exports.mem.buffer, saddr, len)
-      );
-    };
 
     const timeOrigin = Date.now() - performance.now();
     this.importObject = {
