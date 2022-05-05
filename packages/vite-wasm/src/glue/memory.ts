@@ -1,4 +1,4 @@
-import { GoWasm, GoWasmInstance, GoWasmMemory } from "./go";
+import { GoWasm, GoWasmInstance, GoWasmMemory, JsGoInstance } from "./go";
 
 const decoder = new TextDecoder("utf-8");
 const encoder = new TextEncoder();
@@ -113,8 +113,8 @@ type JsGoMemoryRefs = {
 };
 
 function initMemoryRefs(
-  jsGo: GoWasm,
-  buffer: JsGoMemoryBuffer
+  buffer: JsGoMemoryBuffer,
+  jsGo: Omit<JsGoInstance, "memory">
 ): JsGoMemoryRefs {
   const values = [
     // JS values that Go currently has references to, indexed by reference id
@@ -286,9 +286,9 @@ function initMemoryRefs(
 
 export type JsGoMemory = JsGoMemoryBuffer & JsGoMemoryRefs;
 
-export function initJsGoMemory(jsGo: GoWasm): JsGoMemory {
+export function initJsGoMemory(jsGo: Omit<JsGoInstance, "memory">): JsGoMemory {
   const buffer = initMemoryBuffer();
-  const refs = initMemoryRefs(jsGo, buffer);
+  const refs = initMemoryRefs(buffer, jsGo);
 
   return {
     ...buffer,
