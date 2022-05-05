@@ -1,4 +1,4 @@
-import { createGoWasmMemory } from "./memory";
+import { initJsGoMemory, JsGoMemory } from "./memory";
 import { fs, process } from "./sys";
 
 type GlobalThis = any & {
@@ -76,12 +76,12 @@ export class GoWasm {
   private _pendingEvent: null | GoWasmPendingEvent;
   private _scheduledTimeouts: Map<number, number>;
   private _nextCallbackTimeoutID: number;
-  private _memory: GoWasmMemory;
+  private _memory: JsGoMemory;
 
   constructor() {
     this._resolveExitPromise = () => {};
     this._inst = {} as GoWasmInstance;
-    this._memory = createGoWasmMemory(this);
+    this._memory = initJsGoMemory(this);
 
     this.argv = ["js"];
     this.env = {};
@@ -126,7 +126,7 @@ export class GoWasm {
         // func resetMemoryDataView()
         "runtime.resetMemoryDataView": (sp: number) => {
           sp >>>= 0;
-          this._memory.updateDataBuffer(this._inst.exports.mem.buffer);
+          this._memory.setBuffer(this._inst.exports.mem.buffer);
         },
 
         // func nanotime1() int64
@@ -387,7 +387,7 @@ export class GoWasm {
 
   async run(instance: GoWasmInstance) {
     this._inst = instance;
-    this._memory.setInstance(instance);
+    this._memory.setBuffer(instance.exports.mem.buffer);
 
     this.exited = false; // whether the Go program has exited
     const { argc, argv } = this._memory.storeArguments(this.argv, this.env);
