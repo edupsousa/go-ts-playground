@@ -40,27 +40,6 @@ export function createFromExports(
   return instance;
 }
 
-export type GoWasmMemory = {
-  setUint8: (addr: number, v: number) => void;
-  getInt32: (addr: number) => number;
-  setInt32: (addr: number, v: number) => void;
-  getUint32: (addr: number) => number;
-  setInt64: (addr: number, v: number) => void;
-  getInt64: (addr: number) => number;
-  loadValue: (addr: number) => any;
-  storeValue: (addr: number, v: any) => void;
-  loadSlice: (addr: number) => Uint8Array;
-  loadSliceOfValues: (addr: number) => any[];
-  loadString: (addr: number) => string;
-  storeArguments: (
-    args: string[],
-    env: Record<string, string>
-  ) => { argc: number; argv: number };
-  removeRef: (id: number) => void;
-  setInstance: (instance: GoWasmInstance) => void;
-  updateDataBuffer: (buffer: ArrayBuffer) => void;
-};
-
 export class GoWasm {
   public argv: string[];
   public env: Record<string, string>;

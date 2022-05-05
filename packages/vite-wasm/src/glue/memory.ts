@@ -1,4 +1,4 @@
-import { GoWasm, GoWasmInstance, GoWasmMemory, JsGoInstance } from "./go";
+import { JsGoInstance } from "./go";
 
 const decoder = new TextDecoder("utf-8");
 const encoder = new TextEncoder();

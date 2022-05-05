@@ -1,24 +1,64 @@
-import { JsGoMemory } from "./memory";
-
-type JsGoInstance = {
-  exit: (code: number) => void;
-  getsp: () => number;
-  resetMemoryDataView: () => void;
-  memory: JsGoMemory;
-  timeouts: {
-    schedule: (timeout: number) => number;
-    getTimeoutId: (id: number) => number | undefined;
-    remove: (id: number) => void;
-  };
-  timeOrigin: number;
-  sys: {
-    fs: any;
-  };
-};
+import { JsGoInstance } from "./go";
 
 const encoder = new TextEncoder();
 
-export function initializeImports(instance: JsGoInstance) {
+type JsGoImports = {
+  // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
+  // may synchronously trigger a Go event handler. This makes Go code get executed in the middle of the imported
+  // function. A goroutine can switch to a new stack if the current stack is too small (see morestack function).
+  // This changes the SP, thus we have to update the SP used by the imported function.
+  // func wasmExit(code int32)
+  "runtime.wasmExit": (sp: number) => void;
+  // func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
+  "runtime.wasmWrite": (sp: number) => void;
+  // func resetMemoryDataView()
+  "runtime.resetMemoryDataView": (sp: number) => void;
+  // func nanotime1() int64
+  "runtime.nanotime1": (sp: number) => void;
+  // func walltime() (sec int64, nsec int32)
+  "runtime.walltime": (sp: number) => void;
+  // func scheduleTimeoutEvent(delay int64) int32
+  "runtime.scheduleTimeoutEvent": (sp: number) => void;
+  // func clearTimeoutEvent(id int32)
+  "runtime.clearTimeoutEvent": (sp: number) => void;
+  // func getRandomData(r []byte)
+  "runtime.getRandomData": (sp: number) => void;
+  // func finalizeRef(v ref)
+  "syscall/js.finalizeRef": (sp: number) => void;
+  // func stringVal(value string) ref
+  "syscall/js.stringVal": (sp: number) => void;
+  // func valueGet(v ref, p string) ref
+  "syscall/js.valueGet": (sp: number) => void;
+  // func valueSet(v ref, p string, x ref)
+  "syscall/js.valueSet": (sp: number) => void;
+  // func valueDelete(v ref, p string)
+  "syscall/js.valueDelete": (sp: number) => void;
+  // func valueIndex(v ref, i int) ref
+  "syscall/js.valueIndex": (sp: number) => void;
+  // valueSetIndex(v ref, i int, x ref)
+  "syscall/js.valueSetIndex": (sp: number) => void;
+  // func valueCall(v ref, m string, args []ref) (ref, bool)
+  "syscall/js.valueCall": (sp: number) => void;
+  // func valueInvoke(v ref, args []ref) (ref, bool)
+  "syscall/js.valueInvoke": (sp: number) => void;
+  // func valueNew(v ref, args []ref) (ref, bool)
+  "syscall/js.valueNew": (sp: number) => void;
+  // func valueLength(v ref) int
+  "syscall/js.valueLength": (sp: number) => void;
+  // valuePrepareString(v ref) (ref, int)
+  "syscall/js.valuePrepareString": (sp: number) => void;
+  // valueLoadString(v ref, b []byte)
+  "syscall/js.valueLoadString": (sp: number) => void;
+  // func valueInstanceOf(v ref, t ref) bool
+  "syscall/js.valueInstanceOf": (sp: number) => void;
+  // func copyBytesToGo(dst []byte, src ref) (int, bool)
+  "syscall/js.copyBytesToGo": (sp: number) => void;
+  // func copyBytesToJS(dst ref, src []byte) (int, bool)
+  "syscall/js.copyBytesToJS": (sp: number) => void;
+  debug: (value: any) => void;
+};
+
+export function initializeImports(instance: JsGoInstance): JsGoImports {
   return {
     // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
     // may synchronously trigger a Go event handler. This makes Go code get executed in the middle of the imported
@@ -26,7 +66,7 @@ export function initializeImports(instance: JsGoInstance) {
     // This changes the SP, thus we have to update the SP used by the imported function.
 
     // func wasmExit(code int32)
-    "runtime.wasmExit": (sp: number) => {
+    "runtime.wasmExit": (sp: number): void => {
       sp >>>= 0;
       const code = instance.memory.getInt32(sp + 8);
       // this.exited = true;
@@ -39,7 +79,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
-    "runtime.wasmWrite": (sp: number) => {
+    "runtime.wasmWrite": (sp: number): void => {
       sp >>>= 0;
       const fd = instance.memory.getInt64(sp + 8);
       const p = instance.memory.getInt64(sp + 16);
@@ -51,13 +91,13 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func resetMemoryDataView()
-    "runtime.resetMemoryDataView": (sp: number) => {
+    "runtime.resetMemoryDataView": (sp: number): void => {
       sp >>>= 0;
       instance.resetMemoryDataView();
     },
 
     // func nanotime1() int64
-    "runtime.nanotime1": (sp: number) => {
+    "runtime.nanotime1": (sp: number): void => {
       sp >>>= 0;
       instance.memory.setInt64(
         sp + 8,
@@ -66,7 +106,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func walltime() (sec int64, nsec int32)
-    "runtime.walltime": (sp: number) => {
+    "runtime.walltime": (sp: number): void => {
       sp >>>= 0;
       const msec = new Date().getTime();
       instance.memory.setInt64(sp + 8, msec / 1000);
@@ -74,7 +114,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func scheduleTimeoutEvent(delay int64) int32
-    "runtime.scheduleTimeoutEvent": (sp: number) => {
+    "runtime.scheduleTimeoutEvent": (sp: number): void => {
       sp >>>= 0;
       const id = instance.timeouts.schedule(
         instance.memory.getInt64(sp + 8) + 1
@@ -83,7 +123,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func clearTimeoutEvent(id int32)
-    "runtime.clearTimeoutEvent": (sp: number) => {
+    "runtime.clearTimeoutEvent": (sp: number): void => {
       sp >>>= 0;
       const id = instance.memory.getInt32(sp + 8);
       const timeoutId = instance.timeouts.getTimeoutId(id);
@@ -93,28 +133,27 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func getRandomData(r []byte)
-    "runtime.getRandomData": (sp: number) => {
+    "runtime.getRandomData": (sp: number): void => {
       sp >>>= 0;
       crypto.getRandomValues(instance.memory.loadSlice(sp + 8));
     },
 
     // func finalizeRef(v ref)
-    "syscall/js.finalizeRef": (sp: number) => {
+    "syscall/js.finalizeRef": (sp: number): void => {
       sp >>>= 0;
       const id = instance.memory.getUint32(sp + 8);
       instance.memory.removeRef(id);
     },
 
     // func stringVal(value string) ref
-    "syscall/js.stringVal": (sp: number) => {
+    "syscall/js.stringVal": (sp: number): void => {
       sp >>>= 0;
       instance.memory.storeValue(sp + 24, instance.memory.loadString(sp + 8));
     },
 
     // func valueGet(v ref, p string) ref
-    "syscall/js.valueGet": (sp: number) => {
+    "syscall/js.valueGet": (sp: number): void => {
       sp >>>= 0;
-      console.log("valueGet", instance.memory.loadValue(sp + 8));
       const result = Reflect.get(
         instance.memory.loadValue(sp + 8),
         instance.memory.loadString(sp + 16)
@@ -124,7 +163,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueSet(v ref, p string, x ref)
-    "syscall/js.valueSet": (sp: number) => {
+    "syscall/js.valueSet": (sp: number): void => {
       sp >>>= 0;
       Reflect.set(
         instance.memory.loadValue(sp + 8),
@@ -134,7 +173,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueDelete(v ref, p string)
-    "syscall/js.valueDelete": (sp: number) => {
+    "syscall/js.valueDelete": (sp: number): void => {
       sp >>>= 0;
       Reflect.deleteProperty(
         instance.memory.loadValue(sp + 8),
@@ -143,7 +182,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueIndex(v ref, i int) ref
-    "syscall/js.valueIndex": (sp: number) => {
+    "syscall/js.valueIndex": (sp: number): void => {
       sp >>>= 0;
       instance.memory.storeValue(
         sp + 24,
@@ -155,7 +194,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // valueSetIndex(v ref, i int, x ref)
-    "syscall/js.valueSetIndex": (sp: number) => {
+    "syscall/js.valueSetIndex": (sp: number): void => {
       sp >>>= 0;
       Reflect.set(
         instance.memory.loadValue(sp + 8),
@@ -165,7 +204,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueCall(v ref, m string, args []ref) (ref, bool)
-    "syscall/js.valueCall": (sp: number) => {
+    "syscall/js.valueCall": (sp: number): void => {
       sp >>>= 0;
       try {
         const v = instance.memory.loadValue(sp + 8);
@@ -183,7 +222,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueInvoke(v ref, args []ref) (ref, bool)
-    "syscall/js.valueInvoke": (sp: number) => {
+    "syscall/js.valueInvoke": (sp: number): void => {
       sp >>>= 0;
       try {
         const v = instance.memory.loadValue(sp + 8);
@@ -200,7 +239,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueNew(v ref, args []ref) (ref, bool)
-    "syscall/js.valueNew": (sp: number) => {
+    "syscall/js.valueNew": (sp: number): void => {
       sp >>>= 0;
       try {
         const v = instance.memory.loadValue(sp + 8);
@@ -217,7 +256,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func valueLength(v ref) int
-    "syscall/js.valueLength": (sp: number) => {
+    "syscall/js.valueLength": (sp: number): void => {
       sp >>>= 0;
       instance.memory.setInt64(
         sp + 16,
@@ -226,7 +265,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // valuePrepareString(v ref) (ref, int)
-    "syscall/js.valuePrepareString": (sp: number) => {
+    "syscall/js.valuePrepareString": (sp: number): void => {
       sp >>>= 0;
       const str = encoder.encode(String(instance.memory.loadValue(sp + 8)));
       instance.memory.storeValue(sp + 16, str);
@@ -234,14 +273,14 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // valueLoadString(v ref, b []byte)
-    "syscall/js.valueLoadString": (sp: number) => {
+    "syscall/js.valueLoadString": (sp: number): void => {
       sp >>>= 0;
       const str = instance.memory.loadValue(sp + 8);
       instance.memory.loadSlice(sp + 16).set(str);
     },
 
     // func valueInstanceOf(v ref, t ref) bool
-    "syscall/js.valueInstanceOf": (sp: number) => {
+    "syscall/js.valueInstanceOf": (sp: number): void => {
       sp >>>= 0;
       instance.memory.setUint8(
         sp + 24,
@@ -253,7 +292,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func copyBytesToGo(dst []byte, src ref) (int, bool)
-    "syscall/js.copyBytesToGo": (sp: number) => {
+    "syscall/js.copyBytesToGo": (sp: number): void => {
       sp >>>= 0;
       const dst = instance.memory.loadSlice(sp + 8);
       const src = instance.memory.loadValue(sp + 32);
@@ -268,7 +307,7 @@ export function initializeImports(instance: JsGoInstance) {
     },
 
     // func copyBytesToJS(dst ref, src []byte) (int, bool)
-    "syscall/js.copyBytesToJS": (sp: number) => {
+    "syscall/js.copyBytesToJS": (sp: number): void => {
       sp >>>= 0;
       const dst = instance.memory.loadValue(sp + 8);
       const src = instance.memory.loadSlice(sp + 16);
@@ -282,7 +321,7 @@ export function initializeImports(instance: JsGoInstance) {
       instance.memory.setUint8(sp + 48, 1);
     },
 
-    debug: (value: any) => {
+    debug: (value: any): void => {
       console.log(value);
     },
   };
