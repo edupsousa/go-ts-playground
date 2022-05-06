@@ -1,13 +1,16 @@
-import { createFromExports } from "./glue/goWasmInstance";
+import { isGoWasmInstance } from "./glue/goWasmInstance";
 import { createJsGo } from "./glue/jsGo";
+import { createWasmInstance } from "./glue/utils";
 import "./style.css";
 import main from "./wasm/dist/go.wasm";
 
 const go = createJsGo();
 main(go.importObject).then((exports) => {
   console.info(`WASM Module Loaded via Vite`);
-  const instance = createFromExports(exports);
-  go.loadModule(instance);
+  const instance = createWasmInstance(exports);
+  if (!isGoWasmInstance(instance))
+    throw new Error("Instance exports don't match Go WebAssembly module");
+  go.loadInstance(instance);
   go.run(["js"], {});
 });
 

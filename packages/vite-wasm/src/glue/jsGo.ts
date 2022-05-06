@@ -21,7 +21,7 @@ type JsGoPendingEvent = {
  * Methods and properties used to load and run Go WebAssembly modules.
  */
 type JsGo = {
-  loadModule: (module: GoWasmInstance) => void;
+  loadInstance: (instance: GoWasmInstance) => void;
   run(args: string[], env: Record<string, string>): Promise<void>;
   importObject: WebAssembly.Imports & { go: JsGoImports };
 };
@@ -51,7 +51,7 @@ globalThis.fs = fs;
 globalThis.process = process;
 
 export function createJsGo(): JsGo {
-  let module: GoWasmInstance | null = null;
+  let instance: GoWasmInstance | null = null;
   let exited = false;
   let _pendingEvent: null | JsGoPendingEvent = null;
 
@@ -74,22 +74,22 @@ export function createJsGo(): JsGo {
   };
 
   const jsGo: JsGo = {
-    loadModule,
+    loadInstance,
     run,
     importObject: {
       go: initializeImports(runtime),
     },
   };
 
-  function loadModule(updatedModule: GoWasmInstance) {
-    module = updatedModule;
+  function loadInstance(updatedInstance: GoWasmInstance) {
+    instance = updatedInstance;
     resetMemoryDataView();
   }
 
   async function run(args: string[], env: Record<string, string>) {
-    if (module === null) throw new Error("Go Wasm Module not loaded");
+    if (instance === null) throw new Error("Go Wasm Module not loaded");
     const { argc, argv } = runtime.memory.storeArguments(args, env);
-    module.exports.run(argc, argv);
+    instance.exports.run(argc, argv);
     if (exited) {
       resolveExitPromise();
     }
@@ -104,21 +104,21 @@ export function createJsGo(): JsGo {
   }
 
   function getsp(): number {
-    if (module === null) throw new Error("Go Wasm Module not loaded");
-    return module.exports.getsp();
+    if (instance === null) throw new Error("Go Wasm Module not loaded");
+    return instance.exports.getsp();
   }
 
   function resetMemoryDataView() {
-    if (module === null) throw new Error("Go Wasm Module not loaded");
-    runtime.memory.setBuffer(module.exports.mem.buffer);
+    if (instance === null) throw new Error("Go Wasm Module not loaded");
+    runtime.memory.setBuffer(instance.exports.mem.buffer);
   }
 
   function resume() {
-    if (module === null) throw new Error("Go Wasm Module not loaded");
+    if (instance === null) throw new Error("Go Wasm Module not loaded");
     if (exited) {
       throw new Error("Go program has already exited");
     }
-    module.exports.resume();
+    instance.exports.resume();
     if (exited) {
       resolveExitPromise();
     }
