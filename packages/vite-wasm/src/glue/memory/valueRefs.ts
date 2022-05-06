@@ -1,4 +1,4 @@
-import { JsGoEventHandlerApi } from "../jsGo";
+import { JsGoSyscallJsApi } from "../jsGo";
 import { JsGoMemoryBuffer } from "./dataView";
 
 const encoder = new TextEncoder();
@@ -19,7 +19,7 @@ export type JsGoMemoryRefs = {
 
 export function initMemoryRefs(
   buffer: JsGoMemoryBuffer,
-  jsGo: JsGoEventHandlerApi
+  syscallApi: JsGoSyscallJsApi
 ): JsGoMemoryRefs {
   const values = [
     // JS values that Go currently has references to, indexed by reference id
@@ -29,7 +29,7 @@ export function initMemoryRefs(
     true,
     false,
     globalThis,
-    jsGo,
+    syscallApi,
   ];
 
   const goRefCounts = new Array(7).fill(Infinity); // number of references that Go has to a JS value, indexed by reference id
@@ -41,7 +41,7 @@ export function initMemoryRefs(
     [true, 3],
     [false, 4],
     [globalThis, 5],
-    [jsGo, 6],
+    [syscallApi, 6],
   ]);
 
   // unused ids that have been garbage collected
