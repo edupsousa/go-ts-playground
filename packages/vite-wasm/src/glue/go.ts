@@ -51,12 +51,6 @@ type JsGoExternal = {
   getsp: () => number;
   resetMemoryDataView: () => void;
   memory: JsGoMemory;
-  timeouts: {
-    schedule: (timeout: number) => number;
-    getTimeoutId: (id: number) => number | undefined;
-    remove: (id: number) => void;
-  };
-  timeOrigin: number;
   sys: {
     fs: any;
   };
@@ -80,8 +74,6 @@ export function createJsGoInstance(): JsGo {
   });
 
   const jsGo = withMemoryAndImports({
-    timeOrigin: Date.now() - performance.now(),
-    timeouts: initTimeouts(),
     loadModule,
     exit,
     run,
@@ -155,46 +147,6 @@ export function createJsGoInstance(): JsGo {
       go._pendingEvent = event;
       go._resume();
       return event.result;
-    };
-  }
-
-  function initTimeouts() {
-    const _scheduledTimeouts: Map<number, number> = new Map();
-    let _nextCallbackTimeoutID: number = 1;
-
-    function schedule(timeout: number) {
-      const id = _nextCallbackTimeoutID;
-      _nextCallbackTimeoutID++;
-      _scheduledTimeouts.set(
-        id,
-        setTimeout(
-          () => {
-            _resume();
-            while (_scheduledTimeouts.has(id)) {
-              // for some reason Go failed to register the timeout event, log and try again
-              // (temporary workaround for https://github.com/golang/go/issues/28975)
-              console.warn("scheduleTimeoutEvent: missed timeout event");
-              _resume();
-            }
-          },
-          timeout // setTimeout has been seen to fire up to 1 millisecond early
-        )
-      );
-      return id;
-    }
-
-    function getTimeoutId(id: number) {
-      return _scheduledTimeouts.get(id);
-    }
-
-    function remove(id: number) {
-      _scheduledTimeouts.delete(id);
-    }
-
-    return {
-      schedule,
-      getTimeoutId,
-      remove,
     };
   }
 

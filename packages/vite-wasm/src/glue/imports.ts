@@ -1,6 +1,6 @@
 import { JsGoInstance } from "./go";
 
-const encoder = new TextEncoder();
+type JsGoWithoutImports = Omit<JsGoInstance, "importObject">;
 
 export type JsGoImports = {
   // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
@@ -58,9 +58,52 @@ export type JsGoImports = {
   debug: (value: any) => void;
 };
 
-export function initializeImports(
-  instance: Omit<JsGoInstance, "importObject">
-): JsGoImports {
+function initTimeouts(instance: JsGoWithoutImports) {
+  const _scheduledTimeouts: Map<number, number> = new Map();
+  let _nextCallbackTimeoutID: number = 1;
+
+  function schedule(timeout: number) {
+    const id = _nextCallbackTimeoutID;
+    _nextCallbackTimeoutID++;
+    _scheduledTimeouts.set(
+      id,
+      setTimeout(
+        () => {
+          instance._resume();
+          while (_scheduledTimeouts.has(id)) {
+            // for some reason Go failed to register the timeout event, log and try again
+            // (temporary workaround for https://github.com/golang/go/issues/28975)
+            console.warn("scheduleTimeoutEvent: missed timeout event");
+            instance._resume();
+          }
+        },
+        timeout // setTimeout has been seen to fire up to 1 millisecond early
+      )
+    );
+    return id;
+  }
+
+  function getTimeoutId(id: number) {
+    return _scheduledTimeouts.get(id);
+  }
+
+  function remove(id: number) {
+    _scheduledTimeouts.delete(id);
+  }
+
+  return {
+    schedule,
+    getTimeoutId,
+    remove,
+  };
+}
+
+const encoder = new TextEncoder();
+const timeOrigin = Date.now() - performance.now();
+
+export function initializeImports(instance: JsGoWithoutImports): JsGoImports {
+  const timeouts = initTimeouts(instance);
+
   return {
     // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
     // may synchronously trigger a Go event handler. This makes Go code get executed in the middle of the imported
@@ -103,7 +146,7 @@ export function initializeImports(
       sp >>>= 0;
       instance.memory.setInt64(
         sp + 8,
-        (instance.timeOrigin + performance.now()) * 1000000
+        (timeOrigin + performance.now()) * 1000000
       );
     },
 
@@ -118,9 +161,7 @@ export function initializeImports(
     // func scheduleTimeoutEvent(delay int64) int32
     "runtime.scheduleTimeoutEvent": (sp: number): void => {
       sp >>>= 0;
-      const id = instance.timeouts.schedule(
-        instance.memory.getInt64(sp + 8) + 1
-      );
+      const id = timeouts.schedule(instance.memory.getInt64(sp + 8) + 1);
       instance.memory.setInt32(sp + 16, id);
     },
 
@@ -128,10 +169,10 @@ export function initializeImports(
     "runtime.clearTimeoutEvent": (sp: number): void => {
       sp >>>= 0;
       const id = instance.memory.getInt32(sp + 8);
-      const timeoutId = instance.timeouts.getTimeoutId(id);
+      const timeoutId = timeouts.getTimeoutId(id);
       if (timeoutId === undefined) return;
       clearTimeout(timeoutId);
-      instance.timeouts.remove(id);
+      timeouts.remove(id);
     },
 
     // func getRandomData(r []byte)
