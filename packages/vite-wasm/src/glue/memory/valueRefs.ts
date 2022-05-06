@@ -19,7 +19,7 @@ export type JsGoMemoryRefs = {
 
 export function initMemoryRefs(
   buffer: JsGoMemoryBuffer,
-  jsGo: Omit<JsGoInstance, "memory">
+  jsGo: Partial<JsGoInstance>
 ): JsGoMemoryRefs {
   const values = [
     // JS values that Go currently has references to, indexed by reference id

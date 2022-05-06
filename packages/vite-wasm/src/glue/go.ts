@@ -1,4 +1,4 @@
-import { initializeImports } from "./imports";
+import { initializeImports, JsGoImports } from "./imports";
 import { initJsGoMemory, JsGoMemory } from "./memory";
 import { fs, process } from "./sys";
 
@@ -40,39 +40,9 @@ export function createFromExports(
   return instance;
 }
 
-export class GoWasm {
-  public argv: string[];
-  public env: Record<string, string>;
-  public importObject: WebAssembly.Imports;
-  public exited = false;
-
-  private _inst: JsGoInstance;
-
-  constructor() {
-    this._inst = initJsGoInstance();
-
-    this.argv = ["js"];
-    this.env = {};
-
-    this.importObject = {
-      go: initializeImports(this._inst),
-    };
-  }
-
-  async run(instance: GoWasmInstance) {
-    this._inst.loadModule(instance);
-
-    this._inst.run(this.argv, this.env);
-    if (this.exited) {
-      this._inst._exitPromise;
-    }
-    await this._inst._exitPromise;
-  }
-}
-
 export type JsGoInstance = {
   loadModule: (module: GoWasmInstance) => void;
-  run(args: string[], env: Record<string, string>): void;
+  run(args: string[], env: Record<string, string>): Promise<void>;
   exit: (code: number) => void;
   getsp: () => number;
   resetMemoryDataView: () => void;
@@ -86,6 +56,7 @@ export type JsGoInstance = {
   sys: {
     fs: any;
   };
+  importObject: WebAssembly.Imports & { go: JsGoImports };
   _exitPromise: Promise<unknown>;
   _makeFuncWrapper: (id: number) => (...args: any[]) => any;
   _resume: () => void;
@@ -93,7 +64,7 @@ export type JsGoInstance = {
   _resolveExitPromise: (_value?: unknown) => void;
 };
 
-function initJsGoInstance(): JsGoInstance {
+export function createJsGoInstance(): JsGoInstance {
   let _module: GoWasmInstance | null = null;
   let _exited = false;
   let _pendingEvent: null | GoWasmPendingEvent = null;
@@ -102,7 +73,7 @@ function initJsGoInstance(): JsGoInstance {
     _resolveExitPromise = resolve;
   });
 
-  const jsGo = withMemory({
+  const jsGo = withMemoryAndImports({
     timeOrigin: Date.now() - performance.now(),
     timeouts: initTimeouts(),
     loadModule,
@@ -120,8 +91,13 @@ function initJsGoInstance(): JsGoInstance {
     _resolveExitPromise,
   });
 
-  function withMemory(jsGo: Omit<JsGoInstance, "memory">): JsGoInstance {
+  function withMemoryAndImports(
+    jsGo: Omit<JsGoInstance, "memory" | "importObject">
+  ): JsGoInstance {
     (jsGo as JsGoInstance).memory = initJsGoMemory(jsGo);
+    (jsGo as JsGoInstance).importObject = {
+      go: initializeImports(jsGo as Omit<JsGoInstance, "importObject">),
+    };
     return jsGo as JsGoInstance;
   }
 
@@ -130,10 +106,14 @@ function initJsGoInstance(): JsGoInstance {
     resetMemoryDataView();
   }
 
-  function run(args: string[], env: Record<string, string>) {
+  async function run(args: string[], env: Record<string, string>) {
     if (_module === null) throw new Error("Go Wasm Module not loaded");
     const { argc, argv } = jsGo.memory.storeArguments(args, env);
     _module.exports.run(argc, argv);
+    if (_exited) {
+      _resolveExitPromise();
+    }
+    await _exitPromise;
   }
 
   function exit(code: number): void {

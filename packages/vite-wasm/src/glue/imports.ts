@@ -2,7 +2,7 @@ import { JsGoInstance } from "./go";
 
 const encoder = new TextEncoder();
 
-type JsGoImports = {
+export type JsGoImports = {
   // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
   // may synchronously trigger a Go event handler. This makes Go code get executed in the middle of the imported
   // function. A goroutine can switch to a new stack if the current stack is too small (see morestack function).
@@ -58,7 +58,9 @@ type JsGoImports = {
   debug: (value: any) => void;
 };
 
-export function initializeImports(instance: JsGoInstance): JsGoImports {
+export function initializeImports(
+  instance: Omit<JsGoInstance, "importObject">
+): JsGoImports {
   return {
     // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
     // may synchronously trigger a Go event handler. This makes Go code get executed in the middle of the imported
