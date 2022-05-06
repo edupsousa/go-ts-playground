@@ -1,4 +1,5 @@
-import { createFromExports, createJsGoInstance } from "./glue/go";
+import { createFromExports } from "./glue/goWasmInstance";
+import { createJsGoInstance } from "./glue/jsGo";
 import "./style.css";
 import main from "./wasm/dist/go.wasm";
 

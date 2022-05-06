@@ -1,6 +1,4 @@
-import { JsGoInstance } from "./go";
-
-type JsGoWithoutImports = Omit<JsGoInstance, "importObject">;
+import { JsGoRuntimeApi } from "./jsGo";
 
 export type JsGoImports = {
   // Go's SP does not change as long as no Go code is running. Some operations (e.g. calls, getters and setters)
@@ -58,7 +56,7 @@ export type JsGoImports = {
   debug: (value: any) => void;
 };
 
-function initTimeouts(instance: JsGoWithoutImports) {
+function initTimeouts(instance: JsGoRuntimeApi) {
   const _scheduledTimeouts: Map<number, number> = new Map();
   let _nextCallbackTimeoutID: number = 1;
 
@@ -101,7 +99,7 @@ function initTimeouts(instance: JsGoWithoutImports) {
 const encoder = new TextEncoder();
 const timeOrigin = Date.now() - performance.now();
 
-export function initializeImports(instance: JsGoWithoutImports): JsGoImports {
+export function initializeImports(instance: JsGoRuntimeApi): JsGoImports {
   const timeouts = initTimeouts(instance);
 
   return {
@@ -129,7 +127,7 @@ export function initializeImports(instance: JsGoWithoutImports): JsGoImports {
       const fd = instance.memory.getInt64(sp + 8);
       const p = instance.memory.getInt64(sp + 16);
       const n = instance.memory.getInt32(sp + 24);
-      instance.sys.fs.writeSync(
+      globalThis.fs.writeSync(
         fd,
         new Uint8Array(instance.memory.getBuffer(), p, n)
       );

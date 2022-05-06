@@ -1,4 +1,4 @@
-import { JsGoInstance } from "../go";
+import { JsGoEventHandlerApi } from "../jsGo";
 import { JsGoMemoryBuffer } from "./dataView";
 
 const encoder = new TextEncoder();
@@ -19,7 +19,7 @@ export type JsGoMemoryRefs = {
 
 export function initMemoryRefs(
   buffer: JsGoMemoryBuffer,
-  jsGo: Partial<JsGoInstance>
+  jsGo: JsGoEventHandlerApi
 ): JsGoMemoryRefs {
   const values = [
     // JS values that Go currently has references to, indexed by reference id

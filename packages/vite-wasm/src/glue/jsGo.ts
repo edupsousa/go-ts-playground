@@ -1,3 +1,4 @@
+import { GoWasmInstance } from "./goWasmInstance";
 import { initializeImports, JsGoImports } from "./imports";
 import { initJsGoMemory, JsGoMemory } from "./memory";
 import { fs, process } from "./sys";
@@ -9,36 +10,12 @@ type GlobalThis = any & {
 
 declare var globalThis: GlobalThis;
 
-globalThis.fs = fs;
-globalThis.process = process;
-
-type GoWasmPendingEvent = {
+type JsGoPendingEvent = {
   id: number;
   this: any;
   args: IArguments;
   result?: any;
 };
-
-interface GoWasmExports extends WebAssembly.Exports {
-  mem: WebAssembly.Memory;
-  run: (argc: number, argv: number) => void;
-  getsp: () => number;
-  resume: () => void;
-}
-
-export interface GoWasmInstance extends WebAssembly.Instance {
-  exports: GoWasmExports;
-}
-
-export function createFromExports(
-  exports: WebAssembly.Exports
-): GoWasmInstance {
-  const instance = Object.setPrototypeOf(
-    { exports },
-    WebAssembly.Instance.prototype
-  );
-  return instance;
-}
 
 /**
  * Methods and properties used to load and run Go WebAssembly modules.
@@ -53,32 +30,32 @@ type JsGo = {
  * Methods and properties used by the Go imports to control the WebAssembly
  * instance execution.
  */
-type JsGoImportsApi = {
+export type JsGoRuntimeApi = {
   exit: (code: number) => void;
   getsp: () => number;
-  memory: JsGoMemory;
   resetMemoryDataView: () => void;
   resume: () => void;
-  sys: {
-    fs: any;
-  };
+  memory: JsGoMemory;
 };
 
 /**
  * Those methods are used by the Go runtime to create and execute functions
  * callable from the JS code.
  */
-type JsGoInternalApi = {
+export type JsGoEventHandlerApi = {
   _makeFuncWrapper: (id: number) => (...args: any[]) => any;
-  _pendingEvent: null | GoWasmPendingEvent;
+  _pendingEvent: null | JsGoPendingEvent;
 };
 
-export type JsGoInstance = JsGo & JsGoImportsApi & JsGoInternalApi;
+type JsGoInstance = JsGo & JsGoEventHandlerApi & JsGoRuntimeApi;
+
+globalThis.fs = fs;
+globalThis.process = process;
 
 export function createJsGoInstance(): JsGo {
   let _module: GoWasmInstance | null = null;
   let _exited = false;
-  let _pendingEvent: null | GoWasmPendingEvent = null;
+  let _pendingEvent: null | JsGoPendingEvent = null;
   let _resolveExitPromise = (_value?: unknown) => {};
   const _exitPromise = new Promise((resolve) => {
     _resolveExitPromise = resolve;
@@ -90,11 +67,8 @@ export function createJsGoInstance(): JsGo {
     run,
     getsp,
     resetMemoryDataView,
-    sys: {
-      fs,
-    },
-    _makeFuncWrapper,
     resume,
+    _makeFuncWrapper,
     _pendingEvent,
   });
 
@@ -154,7 +128,7 @@ export function createJsGoInstance(): JsGo {
   function _makeFuncWrapper(id: number) {
     const go = jsGo;
     return function () {
-      const event: GoWasmPendingEvent = { id: id, this: this, args: arguments };
+      const event: JsGoPendingEvent = { id: id, this: this, args: arguments };
       go._pendingEvent = event;
       go.resume();
       return event.result;
