@@ -23,7 +23,7 @@ export const fs = {
     O_APPEND: -1,
     O_EXCL: -1,
   }, // unused
-  writeSync(fd: unknown, buf: Uint8Array) {
+  writeSync(_fd: unknown, buf: Uint8Array) {
     outputBuf += decoder.decode(buf);
     const nl = outputBuf.lastIndexOf("\n");
     if (nl != -1) {
@@ -47,80 +47,80 @@ export const fs = {
     const n = this.writeSync(fd, buf);
     callback(null, n);
   },
-  chmod(path: unknown, mode: unknown, callback: Function) {
+  chmod(_path: unknown, _mode: unknown, callback: Function) {
     callback(enosys());
   },
-  chown(path: unknown, uid: unknown, gid: unknown, callback: Function) {
+  chown(_path: unknown, _uid: unknown, _gid: unknown, callback: Function) {
     callback(enosys());
   },
-  close(fd: unknown, callback: Function) {
+  close(_fd: unknown, callback: Function) {
     callback(enosys());
   },
-  fchmod(fd: unknown, mode: unknown, callback: Function) {
+  fchmod(_fd: unknown, _mode: unknown, callback: Function) {
     callback(enosys());
   },
-  fchown(fd: unknown, uid: unknown, gid: unknown, callback: Function) {
+  fchown(_fd: unknown, _uid: unknown, _gid: unknown, callback: Function) {
     callback(enosys());
   },
-  fstat(fd: unknown, callback: Function) {
+  fstat(_fd: unknown, callback: Function) {
     callback(enosys());
   },
-  fsync(fd: unknown, callback: Function) {
+  fsync(_fd: unknown, callback: Function) {
     callback(null);
   },
-  ftruncate(fd: unknown, length: unknown, callback: Function) {
+  ftruncate(_fd: unknown, _length: unknown, callback: Function) {
     callback(enosys());
   },
-  lchown(path: unknown, uid: unknown, gid: unknown, callback: Function) {
+  lchown(_path: unknown, _uid: unknown, _gid: unknown, callback: Function) {
     callback(enosys());
   },
-  link(path: unknown, link: unknown, callback: Function) {
+  link(_path: unknown, _link: unknown, callback: Function) {
     callback(enosys());
   },
-  lstat(path: unknown, callback: Function) {
+  lstat(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  mkdir(path: unknown, perm: unknown, callback: Function) {
+  mkdir(_path: unknown, _perm: unknown, callback: Function) {
     callback(enosys());
   },
-  open(path: unknown, flags: unknown, mode: unknown, callback: Function) {
+  open(_path: unknown, _flags: unknown, _mode: unknown, callback: Function) {
     callback(enosys());
   },
   read(
-    fd: unknown,
-    buffer: unknown,
-    offset: unknown,
-    length: unknown,
-    position: unknown,
+    _fd: unknown,
+    _buffer: unknown,
+    _offset: unknown,
+    _length: unknown,
+    _position: unknown,
     callback: Function
   ) {
     callback(enosys());
   },
-  readdir(path: unknown, callback: Function) {
+  readdir(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  readlink(path: unknown, callback: Function) {
+  readlink(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  rename(from: unknown, to: unknown, callback: Function) {
+  rename(_from: unknown, _to: unknown, callback: Function) {
     callback(enosys());
   },
-  rmdir(path: unknown, callback: Function) {
+  rmdir(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  stat(path: unknown, callback: Function) {
+  stat(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  symlink(path: unknown, link: unknown, callback: Function) {
+  symlink(_path: unknown, _link: unknown, callback: Function) {
     callback(enosys());
   },
-  truncate(path: unknown, length: unknown, callback: Function) {
+  truncate(_path: unknown, _length: unknown, callback: Function) {
     callback(enosys());
   },
-  unlink(path: unknown, callback: Function) {
+  unlink(_path: unknown, callback: Function) {
     callback(enosys());
   },
-  utimes(path: unknown, atime: unknown, mtime: unknown, callback: Function) {
+  utimes(_path: unknown, _atime: unknown, _mtime: unknown, callback: Function) {
     callback(enosys());
   },
 };

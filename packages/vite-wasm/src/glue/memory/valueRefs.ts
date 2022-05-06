@@ -150,7 +150,7 @@ export function initMemoryRefs(
 
     const argc = args.length;
 
-    const argvPtrs = [];
+    const argvPtrs: number[] = [];
     args.forEach((arg) => {
       argvPtrs.push(strPtr(arg));
     });

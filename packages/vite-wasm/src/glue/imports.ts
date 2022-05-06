@@ -93,8 +93,8 @@ export function initializeImports(
     },
 
     // func resetMemoryDataView()
-    "runtime.resetMemoryDataView": (sp: number): void => {
-      sp >>>= 0;
+    "runtime.resetMemoryDataView": (_sp: number): void => {
+      _sp >>>= 0;
       instance.resetMemoryDataView();
     },
 
