@@ -69,12 +69,12 @@ function initTimeouts(instance: JsGoWithoutImports) {
       id,
       setTimeout(
         () => {
-          instance._resume();
+          instance.resume();
           while (_scheduledTimeouts.has(id)) {
             // for some reason Go failed to register the timeout event, log and try again
             // (temporary workaround for https://github.com/golang/go/issues/28975)
             console.warn("scheduleTimeoutEvent: missed timeout event");
-            instance._resume();
+            instance.resume();
           }
         },
         timeout // setTimeout has been seen to fire up to 1 millisecond early

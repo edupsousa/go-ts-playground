@@ -40,29 +40,40 @@ export function createFromExports(
   return instance;
 }
 
+/**
+ * Methods and properties used to load and run Go WebAssembly modules.
+ */
 type JsGo = {
   loadModule: (module: GoWasmInstance) => void;
   run(args: string[], env: Record<string, string>): Promise<void>;
   importObject: WebAssembly.Imports & { go: JsGoImports };
 };
 
-type JsGoExternal = {
+/**
+ * Methods and properties used by the Go imports to control the WebAssembly
+ * instance execution.
+ */
+type JsGoImportsApi = {
   exit: (code: number) => void;
   getsp: () => number;
-  resetMemoryDataView: () => void;
   memory: JsGoMemory;
+  resetMemoryDataView: () => void;
+  resume: () => void;
   sys: {
     fs: any;
   };
 };
 
-type GoEventHandler = {
+/**
+ * Those methods are used by the Go runtime to create and execute functions
+ * callable from the JS code.
+ */
+type JsGoInternalApi = {
   _makeFuncWrapper: (id: number) => (...args: any[]) => any;
   _pendingEvent: null | GoWasmPendingEvent;
-  _resume: () => void;
 };
 
-export type JsGoInstance = JsGo & JsGoExternal & GoEventHandler;
+export type JsGoInstance = JsGo & JsGoImportsApi & JsGoInternalApi;
 
 export function createJsGoInstance(): JsGo {
   let _module: GoWasmInstance | null = null;
@@ -83,7 +94,7 @@ export function createJsGoInstance(): JsGo {
       fs,
     },
     _makeFuncWrapper,
-    _resume,
+    resume,
     _pendingEvent,
   });
 
@@ -129,7 +140,7 @@ export function createJsGoInstance(): JsGo {
     jsGo.memory.setBuffer(_module.exports.mem.buffer);
   }
 
-  function _resume() {
+  function resume() {
     if (_module === null) throw new Error("Go Wasm Module not loaded");
     if (_exited) {
       throw new Error("Go program has already exited");
@@ -145,7 +156,7 @@ export function createJsGoInstance(): JsGo {
     return function () {
       const event: GoWasmPendingEvent = { id: id, this: this, args: arguments };
       go._pendingEvent = event;
-      go._resume();
+      go.resume();
       return event.result;
     };
   }
