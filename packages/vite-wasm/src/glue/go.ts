@@ -40,9 +40,13 @@ export function createFromExports(
   return instance;
 }
 
-export type JsGoInstance = {
+type JsGo = {
   loadModule: (module: GoWasmInstance) => void;
   run(args: string[], env: Record<string, string>): Promise<void>;
+  importObject: WebAssembly.Imports & { go: JsGoImports };
+};
+
+type JsGoExternal = {
   exit: (code: number) => void;
   getsp: () => number;
   resetMemoryDataView: () => void;
@@ -56,15 +60,17 @@ export type JsGoInstance = {
   sys: {
     fs: any;
   };
-  importObject: WebAssembly.Imports & { go: JsGoImports };
-  _exitPromise: Promise<unknown>;
-  _makeFuncWrapper: (id: number) => (...args: any[]) => any;
-  _resume: () => void;
-  _pendingEvent: null | GoWasmPendingEvent;
-  _resolveExitPromise: (_value?: unknown) => void;
 };
 
-export function createJsGoInstance(): JsGoInstance {
+type GoEventHandler = {
+  _makeFuncWrapper: (id: number) => (...args: any[]) => any;
+  _pendingEvent: null | GoWasmPendingEvent;
+  _resume: () => void;
+};
+
+export type JsGoInstance = JsGo & JsGoExternal & GoEventHandler;
+
+export function createJsGoInstance(): JsGo {
   let _module: GoWasmInstance | null = null;
   let _exited = false;
   let _pendingEvent: null | GoWasmPendingEvent = null;
@@ -84,11 +90,9 @@ export function createJsGoInstance(): JsGoInstance {
     sys: {
       fs,
     },
-    _exitPromise,
     _makeFuncWrapper,
     _resume,
     _pendingEvent,
-    _resolveExitPromise,
   });
 
   function withMemoryAndImports(
@@ -117,6 +121,7 @@ export function createJsGoInstance(): JsGoInstance {
   }
 
   function exit(code: number): void {
+    _exited = true;
     if (code !== 0) {
       console.warn("exit code:", code);
     }
