@@ -53,7 +53,6 @@ globalThis.process = process;
 export function createJsGo(): JsGo {
   let instance: GoWasmInstance | null = null;
   let exited = false;
-  let _pendingEvent: null | JsGoPendingEvent = null;
 
   let resolveExitPromise = (_value?: unknown) => {};
   const exitPromise = new Promise((resolve) => {
@@ -62,7 +61,7 @@ export function createJsGo(): JsGo {
 
   const syscallApi: JsGoSyscallJsApi = {
     _makeFuncWrapper,
-    _pendingEvent,
+    _pendingEvent: null,
   };
 
   const runtime: JsGoRuntimeApi = {
@@ -127,7 +126,7 @@ export function createJsGo(): JsGo {
   function _makeFuncWrapper(id: number) {
     return function () {
       const event: JsGoPendingEvent = { id: id, this: this, args: arguments };
-      _pendingEvent = event;
+      syscallApi._pendingEvent = event;
       resume();
       return event.result;
     };
